@@ -3,7 +3,7 @@
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{vec, Address, Env, String, Vec};
 
-use crate::{BcForgeToken, BcForgeTokenClient, TokenError};
+use crate::{BcForgeToken, BcForgeTokenClient, Recipient, TokenError};
 
 fn setup(env: &Env) -> (BcForgeTokenClient<'_>, Address) {
     let contract_id = env.register(BcForgeToken, ());
@@ -129,4 +129,122 @@ fn test_batch_transfer_while_paused_returns_error() {
             TokenError::ContractPaused as u32
         )))
     );
+}
+
+#[test]
+fn test_batch_mint_single_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup(&env);
+    let recipient = Address::generate(&env);
+
+    let recipients = vec![
+        &env,
+        Recipient {
+            address: recipient.clone(),
+            amount: 1000,
+        },
+    ];
+
+    client.batch_mint(&recipients);
+
+    assert_eq!(client.balance(&recipient), 1000);
+    assert_eq!(client.supply(), 1000);
+}
+
+#[test]
+fn test_batch_mint_multiple_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    let recipients = vec![
+        &env,
+        Recipient {
+            address: r1.clone(),
+            amount: 100,
+        },
+        Recipient {
+            address: r2.clone(),
+            amount: 200,
+        },
+        Recipient {
+            address: r3.clone(),
+            amount: 300,
+        },
+    ];
+
+    client.batch_mint(&recipients);
+
+    assert_eq!(client.balance(&r1), 100);
+    assert_eq!(client.balance(&r2), 200);
+    assert_eq!(client.balance(&r3), 300);
+    assert_eq!(client.supply(), 600);
+}
+
+#[test]
+fn test_batch_mint_rejects_invalid_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    let recipients = vec![
+        &env,
+        Recipient {
+            address: r1.clone(),
+            amount: 100,
+        },
+        Recipient {
+            address: r2.clone(),
+            amount: 0, // Zero amount
+        },
+    ];
+
+    let res = client.try_batch_mint(&recipients);
+    assert_eq!(
+        res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            TokenError::InvalidAmount as u32
+        )))
+    );
+
+    // Verify atomic rollback (no tokens minted)
+    assert_eq!(client.balance(&r1), 0);
+    assert_eq!(client.balance(&r2), 0);
+    assert_eq!(client.supply(), 0);
+}
+
+#[test]
+fn test_batch_mint_while_paused_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup(&env);
+    let recipient = Address::generate(&env);
+
+    let recipients = vec![
+        &env,
+        Recipient {
+            address: recipient.clone(),
+            amount: 100,
+        },
+    ];
+
+    client.pause();
+
+    let res = client.try_batch_mint(&recipients);
+    assert_eq!(
+        res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            TokenError::ContractPaused as u32
+        )))
+    );
+
+    // Verify no tokens minted
+    assert_eq!(client.balance(&recipient), 0);
+    assert_eq!(client.supply(), 0);
 }
