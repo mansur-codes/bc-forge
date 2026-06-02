@@ -4,6 +4,7 @@
 //! to enforce rate limiting on mint and transfer operations.
 
 use soroban_sdk::{Address, Env, String};
+pub use bc_forge_rate_limit::BcForgeRateLimit;
 
 /// Operation types for rate limiting
 pub const OPERATION_MINT: &str = "mint";
@@ -19,7 +20,7 @@ pub fn check_mint_rate_limit(env: &Env, address: &Address, amount: i128) -> bool
     let amount_u64 = if amount < 0 { 0 } else { amount as u64 };
     
     // Check both global and per-address limits
-    BcForgeRateLimit::check_rate_limit(
+    BcForgeRateLimit::check_rate_limit_lib(
         env,
         Some(address),
         String::from_str(env, OPERATION_MINT),
@@ -33,7 +34,7 @@ pub fn check_transfer_rate_limit(env: &Env, from: &Address, amount: i128) -> boo
     let amount_u64 = if amount < 0 { 0 } else { amount as u64 };
     
     // Check both global and per-address limits
-    BcForgeRateLimit::check_rate_limit(
+    BcForgeRateLimit::check_rate_limit_lib(
         env,
         Some(from),
         String::from_str(env, OPERATION_TRANSFER),
@@ -47,7 +48,7 @@ pub fn check_transfer_from_rate_limit(env: &Env, spender: &Address, amount: i128
     let amount_u64 = if amount < 0 { 0 } else { amount as u64 };
     
     // Check both global and per-address limits
-    BcForgeRateLimit::check_rate_limit(
+    BcForgeRateLimit::check_rate_limit_lib(
         env,
         Some(spender),
         String::from_str(env, OPERATION_TRANSFER_FROM),
@@ -61,7 +62,7 @@ pub fn check_burn_rate_limit(env: &Env, from: &Address, amount: i128) -> bool {
     let amount_u64 = if amount < 0 { 0 } else { amount as u64 };
     
     // Check both global and per-address limits
-    BcForgeRateLimit::check_rate_limit(
+    BcForgeRateLimit::check_rate_limit_lib(
         env,
         Some(from),
         String::from_str(env, OPERATION_BURN),
@@ -75,7 +76,7 @@ pub fn check_burn_from_rate_limit(env: &Env, spender: &Address, amount: i128) ->
     let amount_u64 = if amount < 0 { 0 } else { amount as u64 };
     
     // Check both global and per-address limits
-    BcForgeRateLimit::check_rate_limit(
+    BcForgeRateLimit::check_rate_limit_lib(
         env,
         Some(spender),
         String::from_str(env, OPERATION_BURN_FROM),

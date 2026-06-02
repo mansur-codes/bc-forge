@@ -12,12 +12,20 @@ mod rate_limit;
 mod test;
 
 use bc_forge_admin as admin;
+use bc_forge_ttl as ttl;
 use soroban_sdk::token::TokenInterface;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String,
+    contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec, MuxedAddress,
 };
 use reentrancy_guard::ReentrancyGuard;
 use rate_limit::BcForgeRateLimit;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct Recipient {
+    pub address: Address,
+    pub amount: i128,
+}
 
 #[derive(Clone)]
 #[contracttype]
@@ -160,6 +168,10 @@ impl BcForgeToken {
         events::emit_mint(env, admin_address, to, amount, new_balance, new_supply);
         Ok(())
     }
+
+    fn extend_instance_ttl_for_call(env: &Env) {
+        ttl::extend_instance_ttl(env);
+    }
 }
 
 #[contractimpl]
@@ -193,7 +205,7 @@ impl BcForgeToken {
         reentrancy_guard!(&env, "mint_guard", {
             Self::ensure_initialized(&env)?;
             Self::ensure_not_paused(&env)?;
-            let current_admin = Self::read_admin(&env)?;
+            let current_admin = admin::get_admin(&env);
             current_admin.require_auth();
             
             // Check rate limits for mint operation
@@ -209,21 +221,32 @@ impl BcForgeToken {
         reentrancy_guard!(&env, "batch_mint_guard", {
             Self::ensure_initialized(&env)?;
             Self::ensure_not_paused(&env)?;
-            let current_admin = Self::read_admin(&env)?;
+            let current_admin = admin::get_admin(&env);
             current_admin.require_auth();
 
+            Self::extend_instance_ttl_for_call(&env);
+
+            let mut total_amount: i128 = 0;
             for i in 0..recipients.len() {
                 let recipient = recipients.get(i).expect("recipient should exist");
                 if recipient.amount <= 0 {
                     return Err(TokenError::InvalidAmount);
                 }
+                total_amount = total_amount.checked_add(recipient.amount).ok_or(TokenError::InvalidAmount)?;
             }
-        Self::extend_instance_ttl_for_call(&env);
-        Self::ensure_initialized(&env)?;
-        Self::ensure_not_paused(&env)?;
-        let admin_address = admin::get_admin(&env);
-        admin_address.require_auth();
-        Self::internal_mint(&env, &admin_address, &to, amount)
+
+            // Check rate limits for batch mint operation (using total amount on the admin)
+            if !crate::rate_limit::check_mint_rate_limit(&env, &current_admin, total_amount) {
+                return Err(TokenError::InvalidAmount);
+            }
+
+            for i in 0..recipients.len() {
+                let recipient = recipients.get(i).expect("recipient should exist");
+                Self::internal_mint(&env, &current_admin, &recipient.address, recipient.amount)?;
+            }
+
+            Ok(())
+        })
     }
 
     pub fn supply(env: Env) -> i128 {
@@ -256,6 +279,10 @@ impl BcForgeToken {
         events::emit_unpaused(&env, &admin_address);
         Ok(())
     }
+
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, "1.1.0")
+    }
 }
 
 #[contractimpl]
@@ -268,22 +295,15 @@ impl TokenInterface for BcForgeToken {
 
     fn approve(env: Env, from: Address, spender: Address, amount: i128, exp: u32) {
         reentrancy_guard!(&env, "approve_guard", {
+            Self::extend_instance_ttl_for_call(&env);
             Self::panic_on_err(&env, Self::ensure_initialized(&env));
             from.require_auth();
             if amount < 0 {
                 soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
             }
             Self::write_allowance(&env, &from, &spender, amount, exp);
-            events::emit_approve(&env, &from, &spender, amount);
+            events::emit_approve(&env, &from, &spender, amount, exp);
         })
-        Self::extend_instance_ttl_for_call(&env);
-        Self::panic_on_err(&env, Self::ensure_initialized(&env));
-        from.require_auth();
-        if amount < 0 {
-            soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
-        }
-        Self::write_allowance(&env, &from, &spender, amount, exp);
-        events::emit_approve(&env, &from, &spender, amount, exp);
     }
 
     fn balance(env: Env, id: Address) -> i128 {
@@ -292,101 +312,111 @@ impl TokenInterface for BcForgeToken {
         Self::read_balance(&env, &id)
     }
 
-    fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+    fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128) {
         reentrancy_guard!(&env, "transfer_guard", {
+            Self::extend_instance_ttl_for_call(&env);
             Self::panic_on_err(&env, Self::ensure_initialized(&env));
             Self::panic_on_err(&env, Self::ensure_not_paused(&env));
             from.require_auth();
-        Self::extend_instance_ttl_for_call(&env);
-        Self::panic_on_err(&env, Self::ensure_initialized(&env));
-        Self::panic_on_err(&env, Self::ensure_not_paused(&env));
-        from.require_auth();
-        if amount <= 0 {
-            soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
-        }
-        Self::panic_on_err(&env, Self::move_balance(&env, &from, &to, amount));
-        events::emit_transfer(&env, &from, &to, amount);
+            if amount <= 0 {
+                soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
+            }
+            let to_addr = to.address();
+            Self::panic_on_err(&env, Self::move_balance(&env, &from, &to_addr, amount));
+            events::emit_transfer(&env, &from, &to_addr, amount);
+        })
     }
 
     fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
-        Self::extend_instance_ttl_for_call(&env);
-        Self::panic_on_err(&env, Self::ensure_initialized(&env));
-        Self::panic_on_err(&env, Self::ensure_not_paused(&env));
-        spender.require_auth();
-        if amount <= 0 {
-            soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
-        }
+        reentrancy_guard!(&env, "transfer_from_guard", {
+            Self::extend_instance_ttl_for_call(&env);
+            Self::panic_on_err(&env, Self::ensure_initialized(&env));
+            Self::panic_on_err(&env, Self::ensure_not_paused(&env));
+            spender.require_auth();
+            if amount <= 0 {
+                soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
+            }
 
-        let allowance = Self::allowance_amount(&env, &from, &spender);
-        if allowance < amount {
-            soroban_sdk::panic_with_error!(&env, TokenError::InsufficientAllowance);
-        }
+            let allowance = Self::allowance_amount(&env, &from, &spender);
+            if allowance < amount {
+                soroban_sdk::panic_with_error!(&env, TokenError::InsufficientAllowance);
+            }
 
-        let allowance_data = Self::read_allowance_data(&env, &from, &spender);
-        Self::panic_on_err(&env, Self::move_balance(&env, &from, &to, amount));
-        Self::write_allowance(
-            &env,
-            &from,
-            &spender,
-            allowance - amount,
-            allowance_data.expiration_ledger,
-        );
-        events::emit_transfer_from(&env, &spender, &from, &to, amount, allowance - amount);
+            let allowance_data = Self::read_allowance_data(&env, &from, &spender);
+            Self::panic_on_err(&env, Self::move_balance(&env, &from, &to, amount));
+            Self::write_allowance(
+                &env,
+                &from,
+                &spender,
+                allowance - amount,
+                allowance_data.expiration_ledger,
+            );
+            events::emit_transfer_from(&env, &spender, &from, &to, amount, allowance - amount);
+        })
     }
 
     fn burn(env: Env, from: Address, amount: i128) {
-        Self::extend_instance_ttl_for_call(&env);
-        Self::panic_on_err(&env, Self::ensure_initialized(&env));
-        Self::panic_on_err(&env, Self::ensure_not_paused(&env));
-        from.require_auth();
-        if amount <= 0 {
-            soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
-        }
+        reentrancy_guard!(&env, "burn_guard", {
+            Self::extend_instance_ttl_for_call(&env);
+            Self::panic_on_err(&env, Self::ensure_initialized(&env));
+            Self::panic_on_err(&env, Self::ensure_not_paused(&env));
+            from.require_auth();
+            if amount <= 0 {
+                soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
+            }
 
             // Check rate limits for burn operation
             if !crate::rate_limit::check_burn_rate_limit(&env, &from, amount) {
                 soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
             }
 
-        let new_balance = balance - amount;
-        let new_supply = Self::read_supply(&env) - amount;
-        Self::write_balance(&env, &from, new_balance);
-        Self::write_supply(&env, new_supply);
-        events::emit_burn(&env, &from, amount, new_balance, new_supply);
+            let balance = Self::read_balance(&env, &from);
+            if balance < amount {
+                soroban_sdk::panic_with_error!(&env, TokenError::InsufficientBalance);
+            }
+
+            let new_balance = balance - amount;
+            let new_supply = Self::read_supply(&env) - amount;
+            Self::write_balance(&env, &from, new_balance);
+            Self::write_supply(&env, new_supply);
+            events::emit_burn(&env, &from, amount, new_balance, new_supply);
+        })
     }
 
     fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
-        Self::extend_instance_ttl_for_call(&env);
-        Self::panic_on_err(&env, Self::ensure_initialized(&env));
-        Self::panic_on_err(&env, Self::ensure_not_paused(&env));
-        spender.require_auth();
-        if amount <= 0 {
-            soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
-        }
+        reentrancy_guard!(&env, "burn_from_guard", {
+            Self::extend_instance_ttl_for_call(&env);
+            Self::panic_on_err(&env, Self::ensure_initialized(&env));
+            Self::panic_on_err(&env, Self::ensure_not_paused(&env));
+            spender.require_auth();
+            if amount <= 0 {
+                soroban_sdk::panic_with_error!(&env, TokenError::InvalidAmount);
+            }
 
-        let allowance = Self::allowance_amount(&env, &from, &spender);
-        if allowance < amount {
-            soroban_sdk::panic_with_error!(&env, TokenError::InsufficientAllowance);
-        }
+            let allowance = Self::allowance_amount(&env, &from, &spender);
+            if allowance < amount {
+                soroban_sdk::panic_with_error!(&env, TokenError::InsufficientAllowance);
+            }
 
-        let allowance_data = Self::read_allowance_data(&env, &from, &spender);
-        let balance = Self::read_balance(&env, &from);
-        if balance < amount {
-            soroban_sdk::panic_with_error!(&env, TokenError::InsufficientBalance);
-        }
+            let allowance_data = Self::read_allowance_data(&env, &from, &spender);
+            let balance = Self::read_balance(&env, &from);
+            if balance < amount {
+                soroban_sdk::panic_with_error!(&env, TokenError::InsufficientBalance);
+            }
 
-        let new_balance = balance - amount;
-        let new_supply = Self::read_supply(&env) - amount;
-        Self::write_allowance(
-            &env,
-            &from,
-            &spender,
-            allowance - amount,
-            allowance_data.expiration_ledger,
-        );
-        Self::write_balance(&env, &from, new_balance);
-        Self::write_supply(&env, new_supply);
-        events::emit_burn(&env, &from, amount, new_balance, new_supply);
+            let new_balance = balance - amount;
+            let new_supply = Self::read_supply(&env) - amount;
+            Self::write_allowance(
+                &env,
+                &from,
+                &spender,
+                allowance - amount,
+                allowance_data.expiration_ledger,
+            );
+            Self::write_balance(&env, &from, new_balance);
+            Self::write_supply(&env, new_supply);
+            events::emit_burn(&env, &from, amount, new_balance, new_supply);
+        })
     }
 
     fn decimals(env: Env) -> u32 {

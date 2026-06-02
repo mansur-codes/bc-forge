@@ -83,7 +83,7 @@ pub fn require_not_paused(env: &Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::Env;
 
     use soroban_sdk::{contract, contractimpl};
@@ -177,7 +177,9 @@ mod tests {
         let admin = Address::generate(&env);
 
         client.pause(&admin);
-        env.ledger().set(env.ledger().sequence() + 200);
+        let mut info = env.ledger().get();
+        info.sequence_number += 200;
+        env.ledger().set(info);
 
         assert!(client.is_paused());
     }}

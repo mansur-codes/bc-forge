@@ -232,7 +232,7 @@ pub fn mark_executed(env: &Env, proposal_id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{contract, contractimpl, Address, Env};
 
     #[contract]
@@ -265,7 +265,9 @@ mod tests {
         client.set_admin(&admin);
         client.grant_role(&Role::Minter, &role_holder);
 
-        env.ledger().set(env.ledger().sequence() + 200);
+        let mut info = env.ledger().get();
+        info.sequence_number += 200;
+        env.ledger().set(info);
         assert!(client.has_role(&Role::Minter, &role_holder));
     }
 }

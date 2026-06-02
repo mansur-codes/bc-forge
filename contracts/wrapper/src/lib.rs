@@ -18,7 +18,7 @@ mod events;
 use bc_forge_admin as admin;
 use soroban_sdk::token::TokenInterface;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token::TokenClient, Address, Env, String,
+    contract, contracterror, contractimpl, contracttype, token::TokenClient, Address, Env, String, MuxedAddress,
 };
 
 // ─── Storage Keys ────────────────────────────────────────────────────────────
@@ -432,7 +432,7 @@ impl TokenInterface for WrapperContract {
         Self::read_balance(&env, &id)
     }
 
-    fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+    fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128) {
         Self::panic_on_err(&env, Self::ensure_initialized(&env));
         Self::panic_on_err(&env, Self::ensure_not_paused(&env));
         from.require_auth();
@@ -441,8 +441,9 @@ impl TokenInterface for WrapperContract {
             soroban_sdk::panic_with_error!(&env, WrapperError::InvalidAmount);
         }
 
-        Self::panic_on_err(&env, Self::move_balance(&env, &from, &to, amount));
-        events::emit_transfer(&env, &from, &to, amount);
+        let to_addr = to.address();
+        Self::panic_on_err(&env, Self::move_balance(&env, &from, &to_addr, amount));
+        events::emit_transfer(&env, &from, &to_addr, amount);
     }
 
     fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {

@@ -5,7 +5,7 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 #[derive(Clone)]
 #[contracttype]
@@ -46,32 +46,32 @@ impl BcForgeRateLimit {
         env.ledger().timestamp()
     }
 
-    fn get_global_config(env: &Env, operation_type: &str) -> Option<RateLimitConfig> {
+    fn get_global_config(env: &Env, operation_type: String) -> Option<RateLimitConfig> {
         env.storage()
             .instance()
-            .get::<_, RateLimitConfig>(&DataKey::GlobalRateLimit(operation_type.to_string()))
+            .get::<_, RateLimitConfig>(&DataKey::GlobalRateLimit(operation_type))
     }
 
-    fn get_address_config(env: &Env, address: &Address, operation_type: &str) -> Option<RateLimitConfig> {
+    fn get_address_config(env: &Env, address: &Address, operation_type: String) -> Option<RateLimitConfig> {
         env.storage()
             .instance()
-            .get::<_, RateLimitConfig>(&DataKey::AddressRateLimit(address.clone(), operation_type.to_string()))
+            .get::<_, RateLimitConfig>(&DataKey::AddressRateLimit(address.clone(), operation_type))
     }
 
-    fn get_global_state(env: &Env, operation_type: &str) -> RateLimitState {
+    fn get_global_state(env: &Env, operation_type: String) -> RateLimitState {
         env.storage()
             .instance()
-            .get::<_, RateLimitState>(&DataKey::GlobalCount(operation_type.to_string()))
+            .get::<_, RateLimitState>(&DataKey::GlobalCount(operation_type))
             .unwrap_or(RateLimitState {
                 count: 0,
                 last_reset: 0,
             })
     }
 
-    fn get_address_state(env: &Env, address: &Address, operation_type: &str) -> RateLimitState {
+    fn get_address_state(env: &Env, address: &Address, operation_type: String) -> RateLimitState {
         env.storage()
             .instance()
-            .get::<_, RateLimitState>(&DataKey::AddressCount(address.clone(), operation_type.to_string()))
+            .get::<_, RateLimitState>(&DataKey::AddressCount(address.clone(), operation_type))
             .unwrap_or(RateLimitState {
                 count: 0,
                 last_reset: 0,
@@ -93,24 +93,24 @@ impl BcForgeRateLimit {
 
     /// Check if the operation is allowed based on rate limits
     /// Returns true if allowed, false if rate limited
-    pub fn check_rate_limit(
+    pub fn check_rate_limit_lib(
         env: &Env,
         address: Option<&Address>,
-        operation_type: &str,
-        amount: u64,
+        operation_type: String,
+        _amount: u64,
     ) -> bool {
         let current_time = Self::get_current_timestamp(env);
 
         // Check global rate limit first
-        if let Some(global_config) = Self::get_global_config(env, operation_type) {
-            let mut global_state = Self::get_global_state(env, operation_type);
+        if let Some(global_config) = Self::get_global_config(env, operation_type.clone()) {
+            let mut global_state = Self::get_global_state(env, operation_type.clone());
             
             Self::reset_if_needed(
                 env,
                 current_time,
                 &global_config,
                 &mut global_state,
-                &DataKey::GlobalCount(operation_type.to_string()),
+                &DataKey::GlobalCount(operation_type.clone()),
             );
 
             if global_state.count >= global_config.limit {
@@ -120,21 +120,21 @@ impl BcForgeRateLimit {
             Self::increment_count(
                 env,
                 &mut global_state,
-                &DataKey::GlobalCount(operation_type.to_string()),
+                &DataKey::GlobalCount(operation_type.clone()),
             );
         }
 
         // Check per-address rate limit if address is provided
         if let Some(addr) = address {
-            if let Some(address_config) = Self::get_address_config(env, addr, operation_type) {
-                let mut address_state = Self::get_address_state(env, addr, operation_type);
+            if let Some(address_config) = Self::get_address_config(env, addr, operation_type.clone()) {
+                let mut address_state = Self::get_address_state(env, addr, operation_type.clone());
                 
                 Self::reset_if_needed(
                     env,
                     current_time,
                     &address_config,
                     &mut address_state,
-                    &DataKey::AddressCount(addr.clone(), operation_type.to_string()),
+                    &DataKey::AddressCount(addr.clone(), operation_type.clone()),
                 );
 
                 if address_state.count >= address_config.limit {
@@ -144,7 +144,7 @@ impl BcForgeRateLimit {
                 Self::increment_count(
                     env,
                     &mut address_state,
-                    &DataKey::AddressCount(addr.clone(), operation_type.to_string()),
+                    &DataKey::AddressCount(addr.clone(), operation_type.clone()),
                 );
             }
         }
@@ -153,9 +153,9 @@ impl BcForgeRateLimit {
     }
 
     /// Set global rate limit for an operation type
-    pub fn set_global_rate_limit(
+    pub fn set_global_rate_limit_lib(
         env: &Env,
-        operation_type: &str,
+        operation_type: String,
         limit: u64,
         window_seconds: u64,
     ) {
@@ -165,14 +165,14 @@ impl BcForgeRateLimit {
         };
         env.storage()
             .instance()
-            .set(&DataKey::GlobalRateLimit(operation_type.to_string()), &config);
+            .set(&DataKey::GlobalRateLimit(operation_type), &config);
     }
 
     /// Set per-address rate limit for an operation type
-    pub fn set_address_rate_limit(
+    pub fn set_address_rate_limit_lib(
         env: &Env,
         address: &Address,
-        operation_type: &str,
+        operation_type: String,
         limit: u64,
         window_seconds: u64,
     ) {
@@ -182,7 +182,7 @@ impl BcForgeRateLimit {
         };
         env.storage()
             .instance()
-            .set(&DataKey::AddressRateLimit(address.clone(), operation_type.to_string()), &config);
+            .set(&DataKey::AddressRateLimit(address.clone(), operation_type), &config);
     }
 }
 
@@ -197,7 +197,7 @@ impl BcForgeRateLimit {
         amount: u64,
     ) -> bool {
         let address_ref = address.as_ref();
-        BcForgeRateLimit::check_rate_limit(&env, address_ref, &operation_type, amount)
+        BcForgeRateLimit::check_rate_limit_lib(&env, address_ref, operation_type, amount)
     }
 
     /// Set global rate limit for an operation type
@@ -207,7 +207,7 @@ impl BcForgeRateLimit {
         limit: u64,
         window_seconds: u64,
     ) {
-        BcForgeRateLimit::set_global_rate_limit(&env, &operation_type, limit, window_seconds)
+        BcForgeRateLimit::set_global_rate_limit_lib(&env, operation_type, limit, window_seconds)
     }
 
     /// Set per-address rate limit for an operation type
@@ -218,6 +218,6 @@ impl BcForgeRateLimit {
         limit: u64,
         window_seconds: u64,
     ) {
-        BcForgeRateLimit::set_address_rate_limit(&env, &address, &operation_type, limit, window_seconds)
+        BcForgeRateLimit::set_address_rate_limit_lib(&env, &address, operation_type, limit, window_seconds)
     }
 }

@@ -3,7 +3,7 @@
 //! Implements a reentrancy protection pattern to prevent cross-contract callback attacks.
 //! This guard ensures that state-modifying functions cannot be re-entered during execution.
 
-use soroban_sdk::{contracttype, Env, StorageType};
+use soroban_sdk::{contracttype, Env, Symbol};
 
 /// Reentrancy guard state
 #[derive(Clone, Debug, PartialEq)]
@@ -16,7 +16,6 @@ pub enum ReentrancyGuardState {
 }
 
 /// Reentrancy guard for preventing re-entrant calls
-#[contracttype]
 pub struct ReentrancyGuard {
     /// Storage key for the guard state
     pub state_key: &'static str,
@@ -30,10 +29,11 @@ impl ReentrancyGuard {
 
     /// Enters the guard - returns true if successful, false if already entered
     pub fn enter(&self, env: &Env) -> bool {
+        let key = Symbol::new(env, self.state_key);
         let current_state = env
             .storage()
             .persistent()
-            .get::<_, ReentrancyGuardState>(self.state_key)
+            .get::<_, ReentrancyGuardState>(&key)
             .unwrap_or(ReentrancyGuardState::NotEntered);
 
         if current_state == ReentrancyGuardState::Entered {
@@ -42,23 +42,25 @@ impl ReentrancyGuard {
 
         env.storage()
             .persistent()
-            .set(self.state_key, &ReentrancyGuardState::Entered);
+            .set(&key, &ReentrancyGuardState::Entered);
         true
     }
 
     /// Exits the guard
     pub fn exit(&self, env: &Env) {
+        let key = Symbol::new(env, self.state_key);
         env.storage()
             .persistent()
-            .set(self.state_key, &ReentrancyGuardState::NotEntered);
+            .set(&key, &ReentrancyGuardState::NotEntered);
     }
 
     /// Checks if the guard is currently entered
     pub fn is_entered(&self, env: &Env) -> bool {
+        let key = Symbol::new(env, self.state_key);
         let current_state = env
             .storage()
             .persistent()
-            .get::<_, ReentrancyGuardState>(self.state_key)
+            .get::<_, ReentrancyGuardState>(&key)
             .unwrap_or(ReentrancyGuardState::NotEntered);
         current_state == ReentrancyGuardState::Entered
     }

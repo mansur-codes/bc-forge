@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env, String};
+use soroban_sdk::{Address, Env, String, vec};
 
 use crate::{BcForgeToken, BcForgeTokenClient, Recipient, TokenError};
 
@@ -25,6 +25,8 @@ fn test_mint_transfer_and_supply() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, _admin) = setup(&env);
+    let from = Address::generate(&env);
+    let to = Address::generate(&env);
 
     client.mint(&from, &1_000);
     client.transfer(&from, &to, &300);
@@ -141,9 +143,7 @@ fn test_batch_mint_rejects_invalid_amount() {
     let res = client.try_batch_mint(&recipients);
     assert_eq!(
         res,
-        Err(Ok(soroban_sdk::Error::from_contract_error(
-            TokenError::InvalidAmount as u32
-        )))
+        Err(Ok(TokenError::InvalidAmount))
     );
 
     // Verify atomic rollback (no tokens minted)
@@ -172,9 +172,7 @@ fn test_batch_mint_while_paused_fails() {
     let res = client.try_batch_mint(&recipients);
     assert_eq!(
         res,
-        Err(Ok(soroban_sdk::Error::from_contract_error(
-            TokenError::ContractPaused as u32
-        )))
+        Err(Ok(TokenError::ContractPaused))
     );
 
     // Verify no tokens minted
